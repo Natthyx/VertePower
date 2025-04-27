@@ -1,51 +1,77 @@
 const express = require('express');
-const path = require('path');
 const bodyParser = require('body-parser');
-const twilio = require('twilio'); 
-const dotenv = require('dotenv')
+const twilio = require('twilio');
+const path = require('path');
+const dotenv = require('dotenv').config()
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const port = process.env.PORT || 3000;
 
-// Serve static files from the 'public' directory
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Parse incoming requests with JSON payloads
+app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 
-// Catch-all route that serves 'index.html'
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// Twilio configuration (from .env)
+const accountSid = process.env.TWILIO_ACCOUNT_SID;
+const authToken = process.env.TWILIO_AUTH_TOKEN;
+const twilioPhoneNumber = process.env.TWILIO_PHONE_NUMBER;
+const userPhoneNumber = process.env.USER_PHONE_NUMBER;
+
+const client = twilio(accountSid, authToken);
+
+let latestMoisture = 0;
+let isSMSSentLow = false;
+let isSMSSentHigh = false;
+
+app.post('/soil-moisture', (req, res) => {
+  const moisture = req.body.moisture;
+  latestMoisture = moisture; // Update latest moisture value
+
+  if (moisture < 10 && !isSMSSentLow) {
+    sendSMS('Critical alert! Soil moisture is under 10%. Turn on the pump!');
+    isSMSSentLow = true;
+    isSMSSentHigh = false;
+  } else if (moisture > 23 && !isSMSSentHigh) {
+    sendSMS('Soil moisture is above 60%. Turn off the pump.');
+    isSMSSentHigh = true;
+    isSMSSentLow = false;
+  }
+
+  res.sendStatus(200);
 });
 
-// Handle SMS requests
-app.post('/send-sms', (req, res) => {
-  const { to, body } = req.body;
+// Get current soil moisture
+app.get('/soil-moisture', (req, res) => {
+  res.json({ moisture: latestMoisture });
+});
 
-  // Replace these values with your Twilio Account SID, Auth Token, and Twilio phone number
-  const accountSid = process.env.Account_SID;
-  const authToken = process.env.AuthToken;
-  const twilioPhoneNumber = process.env.twilioPhoneNumber;
+// Receive pump control command
+app.post('/pump', (req, res) => {
+  const { action } = req.body;
 
-  // Create a Twilio client
-  const client = twilio(accountSid, authToken);
+  if (action === 'on') {
+    console.log('Pump ON command received.');
+  } else if (action === 'off') {
+    console.log('Pump OFF command received.');
+  } else {
+    return res.status(400).send('Invalid action.');
+  }
 
-  // Send an SMS
+  res.send('Pump action processed.');
+});
+
+// Function to send SMS using Twilio
+function sendSMS(message) {
   client.messages.create({
-    body: body,
-    from: twilioPhoneNumber, 
-    to: to
+    to: userPhoneNumber,
+    from: twilioPhoneNumber,
+    body: message
   })
-  .then(message => {
-    console.log('SMS sent successfully:', message.sid);
-    res.status(200).json({ success: true, message: 'SMS sent successfully' });
+  .then((message) => {
+    console.log('Twilio response:', message.sid);
   })
-  .catch(error => {
-    console.error('Error sending SMS:', error);
-    res.status(500).json({ success: false, message: 'Error sending SMS' });
-  });
-});
+  .catch((error) => console.error('Error sending SMS:', error.message));
+}
 
-app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
+app.listen(port, () => {
+  console.log(`Server is running on http://localhost:${port}`);
 });
